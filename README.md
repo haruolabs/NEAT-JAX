@@ -48,6 +48,27 @@ The evolved policy learns to track the ball and make strategic plays. It plays t
 
 ## Quick Start
 
+### Installation
+
+This project uses [uv](https://docs.astral.sh/uv/) to manage the Python environment and dependencies.
+
+On macOS, install `uv`, create a Python 3.12 environment, and sync dependencies:
+
+```bash
+brew install uv
+uv python install 3.12
+uv venv --python 3.12
+uv sync
+```
+
+If you prefer to activate the virtual environment manually:
+
+```bash
+source .venv/bin/activate
+```
+
+Note: this repository requires Python 3.12 or newer.
+
 ```python
 from src.population import NEATConfig
 from src.evaluator import SimpleEvaluator
@@ -71,6 +92,19 @@ result = evolve(
   key=jax.random.PRNGKey(42)
 )
 ```
+
+### Running the examples
+
+Run examples from the repository root using module mode:
+
+```bash
+uv run python -m examples.classification
+uv run python -m examples.slimevolley
+uv run python -m examples.cartpole
+uv run python -m examples.xor
+```
+
+Using `python examples/<name>.py` may fail with `ModuleNotFoundError: No module named 'src'` because these examples import from the repository root. Running them with `python -m examples.<name>` keeps the root directory on the Python import path.
 
 See `examples/` for complete examples (XOR, CartPole, SlimeVolley, classification task with backprop).
 
