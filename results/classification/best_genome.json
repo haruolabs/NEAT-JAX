@@ -1,0 +1,62 @@
+{
+  "nodes": {
+    "0": {
+      "id": 0,
+      "type": 0,
+      "level": 0
+    },
+    "1": {
+      "id": 1,
+      "type": 0,
+      "level": 0
+    },
+    "2": {
+      "id": 2,
+      "type": 3,
+      "level": 0
+    },
+    "3": {
+      "id": 3,
+      "type": 2,
+      "level": 1
+    },
+    "4": {
+      "id": 4,
+      "type": 1,
+      "level": 1
+    },
+    "5": {
+      "id": 5,
+      "type": 1,
+      "level": 1
+    },
+    "9": {
+      "id": 9,
+      "type": 1,
+      "level": 1
+    }
+  },
+  "connections": {
+    "0": {
+      "innovation": 0,
+      "in_node": 0,
+      "out_node": 3,
+      "weight": 0.6845842003822327,
+      "enabled": false
+    },
+    "1": {
+      "innovation": 1,
+      "in_node": 1,
+      "out_node": 3,
+      "weight": 1.1138875484466553,
+      "enabled": true
+    },
+    "2": {
+      "innovation": 2,
+      "in_node": 2,
+      "out_node": 3,
+      "weight": -0.3142714500427246,
+      "enabled": true
+    }
+  }
+}

@@ -10,7 +10,7 @@ dependencies = [
     "ipdb>=0.13.13",
     "ipykernel>=6.30.1",
     "ipywidgets>=8.1.7",
-    "jax[cpu]>=0.7.1", # Always install CPU version
+    "jax[cpu,cuda12]>=0.7.1", # Always install CPU version
     "jax[tpu]>=0.7.1; sys_platform != 'darwin'",
     "networkx>=3.5",
     "opencv-python>=4.12.0.88",
