@@ -12,18 +12,48 @@ from .innovation import InnovationTracker
 # Node types
 INPUT, HIDDEN, OUTPUT, BIAS = 0, 1, 2, 3
 
+# Hidden-node activation functions. Outputs stay linear and inputs/bias are pass-through.
+HIDDEN_ACTIVATIONS = ("tanh", "relu", "leakyReLU", "Sigmoid", "SILU")
+
+
+def _sample_hidden_activation(key: jax.Array) -> str:
+    idx = int(jr.randint(key, (), 0, len(HIDDEN_ACTIVATIONS)))
+    return HIDDEN_ACTIVATIONS[idx]
+
+
+def default_activation_for_type(node_type: int) -> str:
+    return "tanh" if node_type == HIDDEN else "identity"
+
+
+def apply_node_activation(name: str, value: jax.Array) -> jax.Array:
+    if name == "tanh":
+        return jnp.tanh(value)
+    if name == "relu":
+        return jax.nn.relu(value)
+    if name == "leakyReLU":
+        return jax.nn.leaky_relu(value)
+    if name == "Sigmoid":
+        return jax.nn.sigmoid(value)
+    if name == "SILU":
+        return jax.nn.silu(value)
+    if name == "identity":
+        return value
+    raise ValueError(f"Unsupported activation: {name}")
+
 
 @dataclass
 class NodeGene:
     id: int
     type: int  # INPUT, HIDDEN, OUTPUT, BIAS
     level: int  # feed-forward level (0 for input/bias)
+    activation: str = "tanh"
     
     def copy(self) -> NodeGene:
         return NodeGene(
             id=self.id,
             type=self.type,
-            level=self.level)
+            level=self.level,
+            activation=self.activation)
 
 
 @dataclass
@@ -67,7 +97,7 @@ class Genome:
         """
         # Create a canonical, hashable representation of nodes
         node_items = sorted(self.nodes.items())
-        node_tuple = tuple((nid, n.type, n.level) for nid, n in node_items)
+        node_tuple = tuple((nid, n.type, n.level, n.activation) for nid, n in node_items)
         
         # Create a canonical, hashable representation of connections' structure
         conn_items = sorted(self.connections.items())
@@ -85,7 +115,7 @@ class Genome:
         """Convert genome to JSON-serializable dictionary."""
         return {
             "nodes": {
-                nid: {"id": node.id, "type": node.type, "level": node.level}
+                nid: {"id": node.id, "type": node.type, "level": node.level, "activation": node.activation}
                 for nid, node in self.nodes.items()
             },
             "connections": {
@@ -104,7 +134,9 @@ class Genome:
     def from_dict(cls, data: Dict[str, Any]) -> "Genome":
         """Create genome from dictionary."""
         nodes = {
-            int(nid): NodeGene(**node_data)
+            int(nid): NodeGene(
+                **({"activation": default_activation_for_type(node_data["type"])} | node_data)
+            )
             for nid, node_data in data["nodes"].items()
         }
         connections = {
@@ -161,7 +193,7 @@ class Genome:
         input_node_ids = []
         for _ in range(n_inputs):
             node_id = tracker.allocate_node()
-            g.nodes[node_id] = NodeGene(id=node_id, type=INPUT, level=0)
+            g.nodes[node_id] = NodeGene(id=node_id, type=INPUT, level=0, activation="identity")
             input_node_ids.append(node_id)
 
         # Create optional bias node at level 0
@@ -169,13 +201,13 @@ class Genome:
         bias_node_id = None
         if add_bias:
             bias_node_id = tracker.allocate_node()
-            g.nodes[bias_node_id] = NodeGene(id=bias_node_id, type=BIAS, level=0)
+            g.nodes[bias_node_id] = NodeGene(id=bias_node_id, type=BIAS, level=0, activation="identity")
 
         # Create output nodes at level 1
         output_node_ids = []
         for _ in range(n_outputs):
             node_id = tracker.allocate_node()
-            g.nodes[node_id] = NodeGene(id=node_id, type=OUTPUT, level=1)
+            g.nodes[node_id] = NodeGene(id=node_id, type=OUTPUT, level=1, activation="identity")
             output_node_ids.append(node_id)
 
         # Create fully-connected topology: all inputs/bias -> all outputs
@@ -315,7 +347,13 @@ class Genome:
         new_node_id, in_innov, out_innov = tracker.split_connection(c.innovation)
 
         # create the new hidden node
-        new_node = NodeGene(id=new_node_id, type=HIDDEN, level=in_node.level + 1)
+        k_activation, _ = jr.split(key)
+        new_node = NodeGene(
+            id=new_node_id,
+            type=HIDDEN,
+            level=in_node.level + 1,
+            activation=_sample_hidden_activation(k_activation),
+        )
         self.nodes[new_node_id] = new_node
 
         # add the two replacement connections
@@ -444,12 +482,6 @@ def _phenotype_forward(genome: Genome, x: jax.Array) -> jax.Array:
     
     exec_levels = [level for level in levels if level > 0]
     
-    # activation functions (keep outputs linear; apply squashing externally if needed)
-    act_hidden = jnp.tanh
-    def identity_activation(s: jax.Array) -> jax.Array:
-        return s
-    act_output = identity_activation
-    
     # set inputs (will also store outputs from hidden and output layers)
     vals: Dict[int, jax.Array] = {id: x[i] for i, id in enumerate(input_ids)}
     if bias_id is not None:
@@ -462,8 +494,7 @@ def _phenotype_forward(genome: Genome, x: jax.Array) -> jax.Array:
             for in_id, w in inc:
                 s += jnp.array(w, dtype=x.dtype) * vals[in_id]
             
-            activation = act_output if genome.nodes[node_id].type == OUTPUT else act_hidden
-            vals[node_id] = activation(s)
+            vals[node_id] = apply_node_activation(genome.nodes[node_id].activation, s)
     
     return jnp.stack([vals[nid] for nid in output_ids], axis=0)
 

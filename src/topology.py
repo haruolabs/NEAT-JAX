@@ -3,7 +3,10 @@ from typing import Tuple
 import jax
 import jax.numpy as jnp
 
-from .genome import INPUT, HIDDEN, OUTPUT, BIAS, Genome
+from .genome import BIAS, INPUT, OUTPUT, Genome, HIDDEN_ACTIVATIONS
+
+ACTIVATION_NAME_TO_ID = {"identity": 0}
+ACTIVATION_NAME_TO_ID.update({name: idx + 1 for idx, name in enumerate(HIDDEN_ACTIVATIONS)})
 
 @dataclass(frozen=True)
 class Topology:
@@ -14,11 +17,13 @@ class Topology:
     dst_idx: jnp.ndarray      # [M] edge targets (0..N-1)
     levels: jnp.ndarray       # [N] per-node level (ints)
     level_ids: jnp.ndarray    # [L] unique sorted levels
+    activation_ids: jnp.ndarray  # [N] per-node activation IDs
     n_nodes: int              # total nodes N
     
     def signature(self) -> Tuple:
         return (
             tuple(self.levels.tolist()),
+            tuple(self.activation_ids.tolist()),
             tuple(self.src_idx.tolist()), tuple(self.dst_idx.tolist()),
             tuple(self.input_idx.tolist()), tuple(self.output_idx.tolist()),
             int(self.bias_idx), int(self.n_nodes)
@@ -52,6 +57,10 @@ def build_topology_and_weights(genome: Genome) -> Tuple[Topology, jnp.ndarray]:
     # Levels
     levels = jnp.array([genome.nodes[nid].level for nid in node_ids], dtype=jnp.int32)
     level_ids = jnp.unique(levels, sorted=True)
+    activation_ids = jnp.array(
+        [ACTIVATION_NAME_TO_ID[genome.nodes[nid].activation] for nid in node_ids],
+        dtype=jnp.int32,
+    )
 
     topology = Topology(
         input_idx=jnp.array(sorted(input_idx), dtype=jnp.int32),
@@ -61,6 +70,7 @@ def build_topology_and_weights(genome: Genome) -> Tuple[Topology, jnp.ndarray]:
         dst_idx=dst_idx,
         levels=levels,
         level_ids=level_ids,
+        activation_ids=activation_ids,
         n_nodes=len(node_ids),
     )
     return topology, weights
@@ -110,16 +120,23 @@ def topology2policy(topology: Topology):
             # Weighted sum into all dst nodes for this step
             weighted_values = v[:, topology.src_idx] * weights  # [E, M]
             pre = v.at[:, topology.dst_idx].add(weighted_values)
-            # apply activation function to all hidden nodes
-            is_output = jnp.zeros((N,), dtype=bool).at[topology.output_idx].set(True)
-            is_input = jnp.zeros((N,), dtype=bool).at[topology.input_idx].set(True)
-            is_input = jax.lax.cond(
-                topology.bias_idx >= 0,
-                lambda v: v.at[topology.bias_idx].set(True),
-                lambda v: v,
-                is_input,
-            )
-            activated = jnp.where(is_output[None, :] | is_input[None, :], pre, jnp.tanh(pre))
+            activated = pre
+            for activation_name, activation_id in ACTIVATION_NAME_TO_ID.items():
+                if activation_name == "identity":
+                    continue
+                if activation_name == "tanh":
+                    candidate = jnp.tanh(pre)
+                elif activation_name == "relu":
+                    candidate = jax.nn.relu(pre)
+                elif activation_name == "leakyReLU":
+                    candidate = jax.nn.leaky_relu(pre)
+                elif activation_name == "Sigmoid":
+                    candidate = jax.nn.sigmoid(pre)
+                elif activation_name == "SILU":
+                    candidate = jax.nn.silu(pre)
+                else:
+                    raise ValueError(f"Unsupported activation: {activation_name}")
+                activated = jnp.where(topology.activation_ids[None, :] == activation_id, candidate, activated)
             # Only update nodes that are at this level; keep others as-is
             mask = (topology.levels == lvl)[None, :]  # [1, N]
             v = jnp.where(mask, activated, v)

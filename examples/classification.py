@@ -4,17 +4,20 @@ import argparse
 import json
 from functools import partial
 from pathlib import Path
-from typing import Tuple
+from typing import List, Tuple
 
 import jax
 import jax.numpy as jnp
 import jax.random as jr
+from PIL import Image
 
+from src.draw import draw
 from src.evaluator import SimpleEvaluator
 from src.genome import Genome
+from src.lineage import EvolutionLineage, collect_ancestry, trace_primary_lineage
 from src.population import NEATConfig
 from src.topology import build_topology_and_weights, topology2policy
-from src.trainer import evolve
+from src.trainer import EvolutionResult, evolve
 
 jax.config.update("jax_platforms", "cuda")
 
@@ -48,7 +51,6 @@ def generate_circles_dataset(key: jax.Array, n_samples: int = 500, noise: float 
     ], axis=1)
     X = X + jr.normal(k5, X.shape) * noise
     y = jnp.concatenate([labels_inner, labels_outer])
-
     return X, y
 
 
@@ -138,6 +140,76 @@ def plot_decision_boundary(
     plt.close(fig)
 
 
+def save_lineage_history(lineage: EvolutionLineage, save_path: Path) -> None:
+    save_path.parent.mkdir(parents=True, exist_ok=True)
+    with save_path.open("w", encoding="utf-8") as f:
+        json.dump(lineage.to_dict(), f, indent=2)
+
+
+def save_gif(image_paths: List[Path], save_path: Path, duration_ms: int = 350) -> None:
+    if not image_paths:
+        return
+    frames = [Image.open(path).convert("RGB") for path in image_paths]
+    try:
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        frames[0].save(
+            save_path,
+            save_all=True,
+            append_images=frames[1:],
+            duration=duration_ms,
+            loop=0,
+        )
+    finally:
+        for frame in frames:
+            frame.close()
+
+
+def save_lineage_artifacts(
+    result: EvolutionResult,
+    best_genome_id: int,
+    data: Tuple[jnp.ndarray, jnp.ndarray],
+    output_dir: Path,
+) -> None:
+    if result.lineage is None:
+        raise ValueError("No lineage information is available in the evolution result")
+
+    lineage_dir = output_dir / "lineage"
+    topology_dir = lineage_dir / "topology_snapshots"
+    boundary_dir = lineage_dir / "decision_boundaries"
+    summary_path = lineage_dir / "lineage_summary.json"
+
+    topology_dir.mkdir(parents=True, exist_ok=True)
+    boundary_dir.mkdir(parents=True, exist_ok=True)
+
+    ancestry_records = collect_ancestry(result.lineage, best_genome_id)
+    primary_records = trace_primary_lineage(result.lineage, best_genome_id)
+
+    boundary_paths: List[Path] = []
+    for record in primary_records:
+        genome = Genome.from_dict(record.genome)
+        topology, weights = build_topology_and_weights(genome)
+        stem = f"gen_{record.generation:03d}_genome_{record.genome_id}"
+        topology_path = topology_dir / f"{stem}.png"
+        boundary_path = boundary_dir / f"{stem}.png"
+        draw(topology, weights, save_path=str(topology_path))
+        plot_decision_boundary(genome, data, boundary_path)
+        boundary_paths.append(boundary_path)
+
+    save_gif(boundary_paths, lineage_dir / "decision_boundary_lineage.gif")
+
+    summary = {
+        "final_best_genome_id": best_genome_id,
+        "primary_lineage_genome_ids": [record.genome_id for record in primary_records],
+        "ancestry_genome_ids": [record.genome_id for record in ancestry_records],
+        "topology_snapshot_dir": str(topology_dir),
+        "decision_boundary_dir": str(boundary_dir),
+        "decision_boundary_gif": str(lineage_dir / "decision_boundary_lineage.gif"),
+    }
+    summary_path.parent.mkdir(parents=True, exist_ok=True)
+    with summary_path.open("w", encoding="utf-8") as f:
+        json.dump(summary, f, indent=2)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -149,6 +221,16 @@ def parse_args() -> argparse.Namespace:
         "--plot-decision-boundary",
         action="store_true",
         help="Render and save a decision-boundary plot for the best genome.",
+    )
+    parser.add_argument(
+        "--save-lineage-history",
+        action="store_true",
+        help="Save explicit genome ancestry and species history as JSON.",
+    )
+    parser.add_argument(
+        "--visualize-lineage",
+        action="store_true",
+        help="Save topology snapshots, decision-boundary frames, and a GIF for the champion's primary lineage.",
     )
     parser.add_argument(
         "--output-dir",
@@ -173,14 +255,19 @@ if __name__ == "__main__":
 
     # Configure NEAT with backprop
     config = NEATConfig(
-        pop_size=50,
-        delta_threshold=8.0,
+        pop_size=100, # 50
+        delta_threshold=5.0, # 8.0
         enable_backprop=True,
-        backprop_steps=20, #100
+        backprop_steps=100, # 100
         backprop_lr=0.01,
         backprop_batch_size=128,
+        # Mutate more
+        p_mutate_add_connection = 0.2,
+        p_mutate_add_node = 0.2,
+        target_fitness=0.9,
+
     )
-    GENERATIONS = 100
+    GENERATIONS = 20 # 100
 
     # Create evaluator (evaluates on test set)
     test_data = (X_test, y_test)
@@ -212,7 +299,9 @@ if __name__ == "__main__":
     best_idx = int(jnp.argmax(jnp.array(fitness_history)))
     best_genome = result.history[best_idx].best_genome
     best_fitness = fitness_history[best_idx]
+    best_genome_id = result.history[best_idx].best_genome_id
     print(f"Best fitness: {best_fitness:.4f}")
+    print(f"Best genome ID: {best_genome_id}")
 
     # Validate the best genome
     X_val, y_val = generate_circles_dataset(val_key, n_samples=200, noise=0.05)
@@ -231,3 +320,16 @@ if __name__ == "__main__":
         plot_path = args.output_dir / "decision_boundary.png"
         plot_decision_boundary(best_genome, val_data, plot_path)
         print(f"Saved decision-boundary plot to {plot_path}")
+
+    if args.save_lineage_history or args.visualize_lineage:
+        lineage_path = args.output_dir / "lineage_history.json"
+        if result.lineage is None:
+            raise ValueError("The evolution result did not include lineage history")
+        save_lineage_history(result.lineage, lineage_path)
+        print(f"Saved lineage history to {lineage_path}")
+
+    if args.visualize_lineage:
+        if best_genome_id is None:
+            raise ValueError("The best genome does not have a lineage ID")
+        save_lineage_artifacts(result, best_genome_id, val_data, args.output_dir)
+        print(f"Saved lineage visualizations under {args.output_dir / 'lineage'}")

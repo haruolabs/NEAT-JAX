@@ -101,7 +101,9 @@ Run examples from the repository root using module mode:
 uv run python -m examples.classification
 uv run python -m examples.classification --save-best-genome
 uv run python -m examples.classification --plot-decision-boundary
-uv run python -m examples.classification --save-best-genome --plot-decision-boundary --output-dir results/my_run
+uv run python -m examples.classification --save-lineage-history
+uv run python -m examples.classification --visualize-lineage
+uv run python -m examples.classification --save-best-genome --plot-decision-boundary --save-lineage-history --visualize-lineage --output-dir results/my_run
 uv run python -m examples.slimevolley
 uv run python -m examples.cartpole
 uv run python -m examples.xor
@@ -110,6 +112,8 @@ uv run python -m examples.xor
 The classification example supports these optional flags:
 - `--save-best-genome`: saves the best evolved genome as JSON.
 - `--plot-decision-boundary`: renders and saves a 2D decision-boundary image for the best genome.
+- `--save-lineage-history`: saves explicit parent-child ancestry for every genome plus per-generation species history.
+- `--visualize-lineage`: saves topology snapshots, decision-boundary frames, and a GIF for the champion's primary lineage.
 - `--output-dir`: chooses where those output files are written. The default is `results/classification`.
 
 Using `python examples/<name>.py` may fail with `ModuleNotFoundError: No module named 'src'` because these examples import from the repository root. Running them with `python -m examples.<name>` keeps the root directory on the Python import path.
